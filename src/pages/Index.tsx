@@ -5,11 +5,11 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import Icon from '@/components/ui/icon';
+import AuthModal from '@/components/AuthModal';
 
 interface Server {
   id: string;
@@ -26,38 +26,46 @@ interface Channel {
 
 interface Message {
   id: string;
-  author: string;
-  authorId: string;
-  avatar: string;
+  sender_id?: number;
   content: string;
-  time: string;
+  created_at: string;
+  username?: string;
+  avatar?: string;
   reactions?: { emoji: string; count: number; users: string[] }[];
 }
 
 interface Friend {
-  id: string;
-  name: string;
+  id: number;
+  username: string;
+  discriminator: string;
   avatar: string;
   status: 'online' | 'offline' | 'away';
   activity?: string;
+  unread_count?: number;
 }
 
-interface DirectMessage {
-  id: string;
-  friendId: string;
-  messages: Message[];
-  unread: number;
+interface User {
+  id: number;
+  username: string;
+  discriminator: string;
+  avatar: string;
+  email: string;
 }
 
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎮', '🚀', '⚡'];
 
 const Index = () => {
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string>('');
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  
   const [activeView, setActiveView] = useState<'dm' | 'server' | 'friends' | 'profile' | 'add-friend'>('dm');
   const [selectedServer, setSelectedServer] = useState<string | null>(null);
   const [selectedChannel, setSelectedChannel] = useState('general');
-  const [selectedDM, setSelectedDM] = useState<string | null>(null);
+  const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
   const [messageInput, setMessageInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
+  const [friends, setFriends] = useState<Friend[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [inCall, setInCall] = useState(false);
@@ -67,17 +75,15 @@ const Index = () => {
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null);
   const [friendCode, setFriendCode] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [myCode] = useState('YURA#1337');
   const [language, setLanguage] = useState('ru');
   const [theme, setTheme] = useState('dark');
   const [inputDevice, setInputDevice] = useState('default');
   const [outputDevice, setOutputDevice] = useState('default');
   const [notifications, setNotifications] = useState(true);
   const [showOnlineStatus, setShowOnlineStatus] = useState(true);
+  const [myStatus, setMyStatus] = useState<'online' | 'away' | 'offline'>('online');
   const scrollRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout>();
-
-  const [myStatus, setMyStatus] = useState<'online' | 'away' | 'offline'>('online');
 
   const servers: Server[] = [
     { id: '1', name: 'Игровое Братство', icon: '🎮' },
@@ -88,16 +94,34 @@ const Index = () => {
   const channels: Channel[] = [
     { id: 'general', name: 'общий', type: 'text' },
     { id: 'random', name: 'random', type: 'text' },
-    { id: 'voice-1', name: 'Голосовой 1', type: 'voice', isActive: false },
-    { id: 'voice-2', name: 'Голосовой 2', type: 'voice', isActive: false },
+    { id: 'voice-1', name: 'Голосовой 1', type: 'voice' },
+    { id: 'voice-2', name: 'Голосовой 2', type: 'voice' },
   ];
 
-  const [directMessages, setDirectMessages] = useState<DirectMessage[]>([
-    { id: 'dm1', friendId: '1', messages: [], unread: 0 },
-    { id: 'dm2', friendId: '2', messages: [], unread: 0 },
-  ]);
+  useEffect(() => {
+    const savedUser = localStorage.getItem('user');
+    const savedToken = localStorage.getItem('token');
+    if (savedUser && savedToken) {
+      setUser(JSON.parse(savedUser));
+      setToken(savedToken);
+    } else {
+      setShowAuthModal(true);
+    }
+  }, []);
 
-  const friends: Friend[] = [];
+  useEffect(() => {
+    if (user) {
+      loadFriends();
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (selectedFriend && user) {
+      loadMessages(selectedFriend.id);
+      const interval = setInterval(() => loadMessages(selectedFriend.id), 3000);
+      return () => clearInterval(interval);
+    }
+  }, [selectedFriend, user]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -105,104 +129,123 @@ const Index = () => {
     }
   }, [messages]);
 
-  const handleTyping = () => {
-    if (!isTyping) {
-      setIsTyping(true);
-    }
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
-    typingTimeoutRef.current = setTimeout(() => {
-      setIsTyping(false);
-    }, 1000);
+  const handleAuthSuccess = (userData: User, userToken: string) => {
+    setUser(userData);
+    setToken(userToken);
+    localStorage.setItem('user', JSON.stringify(userData));
+    localStorage.setItem('token', userToken);
+    loadFriends();
   };
 
-  useEffect(() => {
-    if (isTyping) {
-      const timeout = setTimeout(() => {
-        const randomUser = ['GamerPro', 'NeonKnight'][Math.floor(Math.random() * 2)];
-        setTypingUsers([randomUser]);
-        setTimeout(() => setTypingUsers([]), 2000);
-      }, 500);
-      return () => clearTimeout(timeout);
-    }
-  }, [isTyping]);
-
-  const sendMessage = () => {
-    if (!messageInput.trim()) return;
-
-    const newMessage: Message = {
-      id: Date.now().toString(),
-      author: 'Юра',
-      authorId: 'me',
-      avatar: '👨‍🚀',
-      content: messageInput,
-      time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
-      reactions: [],
-    };
-
-    setMessages([...messages, newMessage]);
-    setMessageInput('');
-    setIsTyping(false);
-
-    setTimeout(() => {
-      const responses = [
-        'Понял, уже в деле!',
-        'Отлично, начинаем!',
-        'Согласен, поехали!',
-        'Круто, я с вами',
-      ];
-      const reply: Message = {
-        id: (Date.now() + 1).toString(),
-        author: ['GamerPro', 'NeonKnight'][Math.floor(Math.random() * 2)],
-        authorId: Math.random().toString(),
-        avatar: ['🎯', '⚔️'][Math.floor(Math.random() * 2)],
-        content: responses[Math.floor(Math.random() * responses.length)],
-        time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
-        reactions: [],
-      };
-      setMessages(prev => [...prev, reply]);
-    }, 1500);
-  };
-
-  const addReaction = (messageId: string, emoji: string) => {
-    setMessages(messages.map(msg => {
-      if (msg.id === messageId) {
-        const reactions = msg.reactions || [];
-        const existingReaction = reactions.find(r => r.emoji === emoji);
-        if (existingReaction) {
-          if (existingReaction.users.includes('me')) {
-            return {
-              ...msg,
-              reactions: reactions.map(r => 
-                r.emoji === emoji 
-                  ? { ...r, count: r.count - 1, users: r.users.filter(u => u !== 'me') }
-                  : r
-              ).filter(r => r.count > 0)
-            };
-          } else {
-            return {
-              ...msg,
-              reactions: reactions.map(r => 
-                r.emoji === emoji 
-                  ? { ...r, count: r.count + 1, users: [...r.users, 'me'] }
-                  : r
-              )
-            };
-          }
-        } else {
-          return {
-            ...msg,
-            reactions: [...reactions, { emoji, count: 1, users: ['me'] }]
-          };
-        }
+  const loadFriends = async () => {
+    if (!user) return;
+    try {
+      const response = await fetch(`https://functions.poehali.dev/1eef1767-d1ed-4c6a-84b3-2a2b75c0b19f?user_id=${user.id}`);
+      const data = await response.json();
+      if (response.ok) {
+        setFriends(data.friends || []);
       }
-      return msg;
-    }));
+    } catch (err) {
+      console.error('Failed to load friends:', err);
+    }
+  };
+
+  const loadMessages = async (friendId: number) => {
+    if (!user) return;
+    try {
+      const response = await fetch(`https://functions.poehali.dev/5b880c12-ba0e-4d7b-a27b-b9df0eaebdf3?user_id=${user.id}&friend_id=${friendId}`);
+      const data = await response.json();
+      if (response.ok) {
+        setMessages(data.messages || []);
+      }
+    } catch (err) {
+      console.error('Failed to load messages:', err);
+    }
+  };
+
+  const sendMessage = async () => {
+    if (!messageInput.trim() || !user || !selectedFriend) return;
+
+    try {
+      const response = await fetch('https://functions.poehali.dev/5b880c12-ba0e-4d7b-a27b-b9df0eaebdf3', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'send',
+          sender_id: user.id,
+          recipient_id: selectedFriend.id,
+          content: messageInput,
+        }),
+      });
+
+      if (response.ok) {
+        setMessageInput('');
+        loadMessages(selectedFriend.id);
+      }
+    } catch (err) {
+      console.error('Failed to send message:', err);
+    }
+  };
+
+  const addFriendByCode = async () => {
+    if (!friendCode.trim() || !user) return;
+
+    try {
+      const response = await fetch('https://functions.poehali.dev/1eef1767-d1ed-4c6a-84b3-2a2b75c0b19f', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'add',
+          user_id: user.id,
+          friend_code: friendCode,
+        }),
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        alert('Друг добавлен!');
+        setFriendCode('');
+        loadFriends();
+      } else {
+        alert(data.error || 'Ошибка добавления друга');
+      }
+    } catch (err) {
+      alert('Ошибка подключения к серверу');
+    }
+  };
+
+  const addReaction = async (messageId: string, emoji: string) => {
+    if (!user) return;
+
+    const msg = messages.find(m => m.id === messageId);
+    if (!msg) return;
+
+    const reaction = msg.reactions?.find(r => r.emoji === emoji);
+    const hasReacted = reaction?.users.includes(String(user.id));
+
+    try {
+      await fetch('https://functions.poehali.dev/5b880c12-ba0e-4d7b-a27b-b9df0eaebdf3', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: hasReacted ? 'remove_reaction' : 'add_reaction',
+          message_id: messageId,
+          user_id: user.id,
+          emoji: emoji,
+        }),
+      });
+
+      if (selectedFriend) {
+        loadMessages(selectedFriend.id);
+      }
+    } catch (err) {
+      console.error('Failed to toggle reaction:', err);
+    }
+
     setShowEmojiPicker(null);
   };
 
-  const startCall = (friendId: string, friendName: string) => {
+  const startCall = (friendId: number, friendName: string) => {
     setInCall(true);
     setCallWith(friendName);
   };
@@ -217,16 +260,12 @@ const Index = () => {
   const toggleMute = () => setIsMuted(!isMuted);
   const toggleDeafen = () => setIsDeafened(!isDeafened);
 
-  const addFriendByCode = () => {
-    if (friendCode.trim()) {
-      alert(`Запрос в друзья отправлен: ${friendCode}`);
-      setFriendCode('');
-    }
-  };
-
   const copyMyCode = () => {
-    navigator.clipboard.writeText(myCode);
-    alert('Код скопирован в буфер обмена!');
+    if (user) {
+      const code = `${user.username}#${user.discriminator}`;
+      navigator.clipboard.writeText(code);
+      alert('Код скопирован в буфер обмена!');
+    }
   };
 
   const getStatusColor = (status: string) => {
@@ -245,30 +284,21 @@ const Index = () => {
     }
   };
 
-  const filteredFriends = friends.filter(f => 
-    f.name.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredFriends = friends.filter(f =>
+    f.username.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const openDMWithFriend = (friendId: string) => {
-    setActiveView('dm');
-    setSelectedDM(friendId);
-    const dm = directMessages.find(d => d.friendId === friendId);
-    if (dm) {
-      setMessages(dm.messages);
-      setDirectMessages(directMessages.map(d => 
-        d.friendId === friendId ? { ...d, unread: 0 } : d
-      ));
-    } else {
-      const newDM: DirectMessage = {
-        id: `dm${Date.now()}`,
-        friendId,
-        messages: [],
-        unread: 0,
-      };
-      setDirectMessages([...directMessages, newDM]);
-      setMessages([]);
-    }
+  const handleLogout = () => {
+    localStorage.removeItem('user');
+    localStorage.removeItem('token');
+    setUser(null);
+    setToken('');
+    setShowAuthModal(true);
   };
+
+  if (!user) {
+    return <AuthModal open={showAuthModal} onClose={() => {}} onSuccess={handleAuthSuccess} />;
+  }
 
   return (
     <div className="flex h-screen bg-[hsl(var(--darker-bg))] text-foreground overflow-hidden">
@@ -337,7 +367,7 @@ const Index = () => {
                 onClick={() => setActiveView('friends')}
               >
                 <Icon name="Users" size={18} className="mr-2" />
-                Все друзья
+                Все друзья ({friends.length})
               </Button>
               <Separator className="my-2" />
               <div className="px-2 mb-2">
@@ -345,9 +375,33 @@ const Index = () => {
                   Личные чаты
                 </h3>
               </div>
-              {directMessages.length === 0 && (
+              {friends.map((friend) => (
+                <Button
+                  key={friend.id}
+                  variant="ghost"
+                  className={`w-full justify-start h-10 px-2 ${
+                    selectedFriend?.id === friend.id ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  }`}
+                  onClick={() => {
+                    setSelectedFriend(friend);
+                    setActiveView('dm');
+                  }}
+                >
+                  <div className="relative mr-2">
+                    <span className="text-lg">{friend.avatar}</span>
+                    <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border border-[hsl(var(--dark-bg))] ${getStatusColor(friend.status)}`} />
+                  </div>
+                  <span className="flex-1 text-left truncate">{friend.username}</span>
+                  {(friend.unread_count || 0) > 0 && (
+                    <Badge variant="secondary" className="ml-auto text-xs bg-primary text-white">
+                      {friend.unread_count}
+                    </Badge>
+                  )}
+                </Button>
+              ))}
+              {friends.length === 0 && (
                 <p className="text-sm text-muted-foreground px-2 py-4 text-center">
-                  Нет активных чатов.<br/>Добавьте друзей!
+                  Нет друзей.<br />Добавьте первого!
                 </p>
               )}
             </div>
@@ -368,10 +422,7 @@ const Index = () => {
                   className={`w-full justify-start h-8 px-2 ${
                     selectedChannel === channel.id ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                   }`}
-                  onClick={() => {
-                    setSelectedChannel(channel.id);
-                    setMessages([]);
-                  }}
+                  onClick={() => setSelectedChannel(channel.id)}
                 >
                   <Icon name="Hash" size={16} className="mr-2" />
                   {channel.name}
@@ -391,7 +442,7 @@ const Index = () => {
                   className="w-full justify-start h-8 px-2 text-muted-foreground hover:bg-muted hover:text-foreground"
                   onClick={() => {
                     if (!inCall) {
-                      startCall(channel.id, channel.name);
+                      startCall(parseInt(channel.id), channel.name);
                     }
                   }}
                 >
@@ -407,29 +458,29 @@ const Index = () => {
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <div className="relative">
               <Avatar className="w-8 h-8">
-                <AvatarFallback className="bg-primary text-sm">👨‍🚀</AvatarFallback>
+                <AvatarFallback className="bg-primary text-sm">{user.avatar}</AvatarFallback>
               </Avatar>
               <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[hsl(var(--darker-bg))] ${getStatusColor(myStatus)}`} />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold truncate">Юра</p>
-              <p className="text-xs text-muted-foreground">#1337</p>
+              <p className="text-sm font-semibold truncate">{user.username}</p>
+              <p className="text-xs text-muted-foreground">#{user.discriminator}</p>
             </div>
           </div>
           <div className="flex gap-1">
             {inCall && (
               <>
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
+                <Button
+                  variant="ghost"
+                  size="icon"
                   className={`w-8 h-8 ${isMuted ? 'text-red-500' : ''}`}
                   onClick={toggleMute}
                 >
                   <Icon name={isMuted ? "MicOff" : "Mic"} size={16} />
                 </Button>
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
+                <Button
+                  variant="ghost"
+                  size="icon"
                   className={`w-8 h-8 ${isDeafened ? 'text-red-500' : ''}`}
                   onClick={toggleDeafen}
                 >
@@ -451,8 +502,8 @@ const Index = () => {
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
               <span className="font-semibold">Голосовой канал: {callWith}</span>
             </div>
-            <Button 
-              variant="destructive" 
+            <Button
+              variant="destructive"
               size="sm"
               onClick={endCall}
               className="bg-red-500 hover:bg-red-600"
@@ -494,7 +545,9 @@ const Index = () => {
                   <div>
                     <h3 className="text-lg font-bold mb-2">Ваш код для друзей</h3>
                     <div className="flex items-center gap-2 bg-muted rounded-lg p-3">
-                      <code className="flex-1 font-mono text-primary">{myCode}</code>
+                      <code className="flex-1 font-mono text-primary">
+                        {user.username}#{user.discriminator}
+                      </code>
                       <Button variant="ghost" size="sm" onClick={copyMyCode}>
                         <Icon name="Copy" size={16} className="mr-2" />
                         Копировать
@@ -511,7 +564,7 @@ const Index = () => {
           <>
             <div className="h-12 px-4 flex items-center border-b border-border bg-[hsl(var(--dark-bg))]">
               <Icon name="Users" size={20} className="text-muted-foreground mr-2" />
-              <h2 className="font-semibold">Друзья</h2>
+              <h2 className="font-semibold">Друзья ({friends.length})</h2>
             </div>
 
             <div className="px-4 py-3 border-b border-border">
@@ -531,8 +584,8 @@ const Index = () => {
                 <div className="text-center py-12">
                   <Icon name="Users" size={48} className="mx-auto mb-4 text-muted-foreground" />
                   <p className="text-muted-foreground">У вас пока нет друзей</p>
-                  <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     className="mt-4"
                     onClick={() => setActiveView('add-friend')}
                   >
@@ -555,31 +608,31 @@ const Index = () => {
                           <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[hsl(var(--dark-bg))] ${getStatusColor(friend.status)}`} />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="font-semibold truncate">{friend.name}</p>
+                          <p className="font-semibold truncate">{friend.username}#{friend.discriminator}</p>
                           <p className="text-xs text-muted-foreground truncate">
                             {friend.activity || getStatusText(friend.status)}
                           </p>
                         </div>
                       </div>
                       <div className="flex gap-2">
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           className="w-9 h-9"
-                          onClick={() => openDMWithFriend(friend.id)}
+                          onClick={() => {
+                            setSelectedFriend(friend);
+                            setActiveView('dm');
+                          }}
                         >
                           <Icon name="MessageCircle" size={18} />
                         </Button>
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           className="w-9 h-9"
-                          onClick={() => startCall(friend.id, friend.name)}
+                          onClick={() => startCall(friend.id, friend.username)}
                         >
                           <Icon name="Phone" size={18} />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="w-9 h-9">
-                          <Icon name="MoreVertical" size={18} />
                         </Button>
                       </div>
                     </div>
@@ -596,101 +649,105 @@ const Index = () => {
               <div className="flex items-center gap-2">
                 <Icon name="Hash" size={20} className="text-muted-foreground" />
                 <h2 className="font-semibold">
-                  {activeView === 'dm' ? 'Выберите чат' : channels.find(c => c.id === selectedChannel)?.name}
+                  {selectedFriend ? `${selectedFriend.username}#${selectedFriend.discriminator}` : 'Выберите чат'}
                 </h2>
               </div>
               <div className="flex items-center gap-2">
+                {selectedFriend && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="w-9 h-9"
+                    onClick={() => startCall(selectedFriend.id, selectedFriend.username)}
+                  >
+                    <Icon name="Phone" size={20} />
+                  </Button>
+                )}
                 <Button variant="ghost" size="icon" className="w-9 h-9" onClick={() => setActiveView('friends')}>
                   <Icon name="Users" size={20} />
-                </Button>
-                <Button variant="ghost" size="icon" className="w-9 h-9">
-                  <Icon name="Search" size={20} />
                 </Button>
               </div>
             </div>
 
             <ScrollArea className="flex-1 px-4 py-4" ref={scrollRef}>
-              <div className="space-y-4">
-                {messages.map((message) => (
-                  <div key={message.id} className="flex gap-3 hover:bg-muted/30 p-2 rounded-lg transition-colors animate-fade-in group relative">
-                    <Avatar className="w-10 h-10 mt-1">
-                      <AvatarFallback className="bg-primary text-lg">{message.avatar}</AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1">
-                      <div className="flex items-baseline gap-2">
-                        <span className="font-semibold text-foreground">{message.author}</span>
-                        <span className="text-xs text-muted-foreground">{message.time}</span>
-                      </div>
-                      <p className="text-sm text-foreground/90 mt-1">{message.content}</p>
-                      {message.reactions && message.reactions.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-2">
-                          {message.reactions.map((reaction, idx) => (
-                            <button
-                              key={idx}
-                              onClick={() => addReaction(message.id, reaction.emoji)}
-                              className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs transition-colors ${
-                                reaction.users.includes('me') 
-                                  ? 'bg-primary/30 border border-primary' 
-                                  : 'bg-muted hover:bg-muted/70'
-                              }`}
-                            >
-                              <span>{reaction.emoji}</span>
-                              <span>{reaction.count}</span>
-                            </button>
-                          ))}
+              {!selectedFriend ? (
+                <div className="text-center py-12">
+                  <Icon name="MessageSquare" size={48} className="mx-auto mb-4 text-muted-foreground" />
+                  <p className="text-muted-foreground">Выберите друга для начала общения</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {messages.map((message) => (
+                    <div key={message.id} className="flex gap-3 hover:bg-muted/30 p-2 rounded-lg transition-colors animate-fade-in group relative">
+                      <Avatar className="w-10 h-10 mt-1">
+                        <AvatarFallback className="bg-primary text-lg">{message.avatar}</AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1">
+                        <div className="flex items-baseline gap-2">
+                          <span className="font-semibold text-foreground">{message.username}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {new Date(message.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
                         </div>
-                      )}
-                    </div>
-                    <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                      <div className="relative">
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
-                          className="w-8 h-8"
-                          onClick={() => setShowEmojiPicker(showEmojiPicker === message.id ? null : message.id)}
-                        >
-                          <Icon name="Smile" size={16} />
-                        </Button>
-                        {showEmojiPicker === message.id && (
-                          <div className="absolute right-0 top-full mt-1 bg-[hsl(var(--dark-bg))] border border-border rounded-lg p-2 shadow-lg z-10 grid grid-cols-4 gap-1">
-                            {EMOJIS.map(emoji => (
+                        <p className="text-sm text-foreground/90 mt-1">{message.content}</p>
+                        {message.reactions && message.reactions.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {message.reactions.map((reaction, idx) => (
                               <button
-                                key={emoji}
-                                onClick={() => addReaction(message.id, emoji)}
-                                className="text-2xl hover:scale-125 transition-transform p-1"
+                                key={idx}
+                                onClick={() => addReaction(message.id, reaction.emoji)}
+                                className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs transition-colors ${
+                                  reaction.users.includes(String(user.id))
+                                    ? 'bg-primary/30 border border-primary'
+                                    : 'bg-muted hover:bg-muted/70'
+                                }`}
                               >
-                                {emoji}
+                                <span>{reaction.emoji}</span>
+                                <span>{reaction.count}</span>
                               </button>
                             ))}
                           </div>
                         )}
                       </div>
+                      <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="relative">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="w-8 h-8"
+                            onClick={() => setShowEmojiPicker(showEmojiPicker === message.id ? null : message.id)}
+                          >
+                            <Icon name="Smile" size={16} />
+                          </Button>
+                          {showEmojiPicker === message.id && (
+                            <div className="absolute right-0 top-full mt-1 bg-[hsl(var(--dark-bg))] border border-border rounded-lg p-2 shadow-lg z-10 grid grid-cols-4 gap-1">
+                              {EMOJIS.map(emoji => (
+                                <button
+                                  key={emoji}
+                                  onClick={() => addReaction(message.id, emoji)}
+                                  className="text-2xl hover:scale-125 transition-transform p-1"
+                                >
+                                  {emoji}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                ))}
-                {typingUsers.length > 0 && (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground animate-fade-in px-2">
-                    <div className="flex gap-1">
-                      <span className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                    </div>
-                    <span>{typingUsers.join(', ')} печатает...</span>
-                  </div>
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
             </ScrollArea>
 
             <div className="px-4 pb-6 pt-2">
               <div className="relative">
                 <Input
                   value={messageInput}
-                  onChange={(e) => {
-                    setMessageInput(e.target.value);
-                    handleTyping();
-                  }}
-                  placeholder={`Сообщение в #${activeView === 'dm' ? 'личные' : channels.find(c => c.id === selectedChannel)?.name}`}
+                  onChange={(e) => setMessageInput(e.target.value)}
+                  placeholder={`Сообщение ${selectedFriend ? `для ${selectedFriend.username}` : ''}`}
                   className="pr-12 h-11 bg-muted border-none focus-visible:ring-primary"
+                  disabled={!selectedFriend}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && messageInput.trim()) {
                       sendMessage();
@@ -698,15 +755,12 @@ const Index = () => {
                   }}
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 flex gap-1">
-                  <Button variant="ghost" size="icon" className="w-8 h-8">
-                    <Icon name="Smile" size={18} />
-                  </Button>
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     className="w-8 h-8"
                     onClick={sendMessage}
-                    disabled={!messageInput.trim()}
+                    disabled={!messageInput.trim() || !selectedFriend}
                   >
                     <Icon name="Send" size={18} />
                   </Button>
@@ -734,13 +788,13 @@ const Index = () => {
                       <div className="flex items-center gap-4">
                         <div className="relative">
                           <Avatar className="w-20 h-20">
-                            <AvatarFallback className="bg-primary text-4xl">👨‍🚀</AvatarFallback>
+                            <AvatarFallback className="bg-primary text-4xl">{user.avatar}</AvatarFallback>
                           </Avatar>
                           <div className={`absolute bottom-0 right-0 w-5 h-5 rounded-full border-2 border-[hsl(var(--dark-bg))] ${getStatusColor(myStatus)}`} />
                         </div>
                         <div>
-                          <p className="text-xl font-bold">Юра</p>
-                          <p className="text-sm text-muted-foreground">Космонавт #1337</p>
+                          <p className="text-xl font-bold">{user.username}</p>
+                          <p className="text-sm text-muted-foreground">#{user.discriminator}</p>
                         </div>
                       </div>
                       <Select value={myStatus} onValueChange={(v: any) => setMyStatus(v)}>
@@ -757,19 +811,8 @@ const Index = () => {
                     <Separator />
                     <div className="space-y-3">
                       <div>
-                        <Label className="text-sm font-semibold text-muted-foreground">Имя пользователя</Label>
-                        <Input defaultValue="Юра" className="mt-1 bg-muted border-none" />
-                      </div>
-                      <div>
                         <Label className="text-sm font-semibold text-muted-foreground">Email</Label>
-                        <Input defaultValue="yura@space.dev" className="mt-1 bg-muted border-none" />
-                      </div>
-                      <div>
-                        <Label className="text-sm font-semibold text-muted-foreground">Статус активности</Label>
-                        <Input 
-                          placeholder="Играю в игру..." 
-                          className="mt-1 bg-muted border-none" 
-                        />
+                        <Input value={user.email} className="mt-1 bg-muted border-none" disabled />
                       </div>
                     </div>
                   </div>
@@ -804,40 +847,12 @@ const Index = () => {
                         </SelectContent>
                       </Select>
                     </div>
-                    <Separator />
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold">Шумоподавление</p>
-                        <p className="text-sm text-muted-foreground">Фильтр фонового шума</p>
-                      </div>
-                      <Switch defaultChecked />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold">Эхоподавление</p>
-                        <p className="text-sm text-muted-foreground">Убирает эхо в звонках</p>
-                      </div>
-                      <Switch defaultChecked />
-                    </div>
                   </div>
                 </div>
 
                 <div>
                   <h3 className="text-lg font-bold mb-4">Внешний вид</h3>
                   <div className="bg-[hsl(var(--dark-bg))] rounded-lg p-6 space-y-4">
-                    <div>
-                      <Label className="text-sm font-semibold mb-2 block">Тема</Label>
-                      <Select value={theme} onValueChange={setTheme}>
-                        <SelectTrigger className="bg-muted border-none">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="dark">Темная</SelectItem>
-                          <SelectItem value="light">Светлая</SelectItem>
-                          <SelectItem value="auto">Автоматически</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
                     <div>
                       <Label className="text-sm font-semibold mb-2 block">Язык</Label>
                       <Select value={language} onValueChange={setLanguage}>
@@ -851,59 +866,18 @@ const Index = () => {
                         </SelectContent>
                       </Select>
                     </div>
-                    <Separator />
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold">Компактный режим</p>
-                        <p className="text-sm text-muted-foreground">Уменьшить отступы</p>
-                      </div>
-                      <Switch />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold">Анимации</p>
-                        <p className="text-sm text-muted-foreground">Плавные переходы</p>
-                      </div>
-                      <Switch defaultChecked />
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="text-lg font-bold mb-4">Уведомления</h3>
-                  <div className="bg-[hsl(var(--dark-bg))] rounded-lg p-6 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold">Включить уведомления</p>
-                        <p className="text-sm text-muted-foreground">Получать push-уведомления</p>
-                      </div>
-                      <Switch checked={notifications} onCheckedChange={setNotifications} />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold">Звук уведомлений</p>
-                        <p className="text-sm text-muted-foreground">Проигрывать звук</p>
-                      </div>
-                      <Switch defaultChecked />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold">Показывать статус</p>
-                        <p className="text-sm text-muted-foreground">Друзья видят ваш статус</p>
-                      </div>
-                      <Switch checked={showOnlineStatus} onCheckedChange={setShowOnlineStatus} />
-                    </div>
                   </div>
                 </div>
 
                 <div>
                   <h3 className="text-lg font-bold mb-4 text-red-500">Опасная зона</h3>
                   <div className="bg-[hsl(var(--dark-bg))] rounded-lg p-6 space-y-3">
-                    <Button variant="outline" className="w-full border-red-500 text-red-500 hover:bg-red-500 hover:text-white">
+                    <Button
+                      variant="outline"
+                      className="w-full border-red-500 text-red-500 hover:bg-red-500 hover:text-white"
+                      onClick={handleLogout}
+                    >
                       Выйти из аккаунта
-                    </Button>
-                    <Button variant="outline" className="w-full border-red-500 text-red-500 hover:bg-red-500 hover:text-white">
-                      Удалить аккаунт
                     </Button>
                   </div>
                 </div>
@@ -912,6 +886,8 @@ const Index = () => {
           </>
         )}
       </div>
+
+      <AuthModal open={showAuthModal} onClose={() => {}} onSuccess={handleAuthSuccess} />
     </div>
   );
 };

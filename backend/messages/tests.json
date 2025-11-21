@@ -1,0 +1,33 @@
+{
+  "tests": [
+    {
+      "name": "Send message",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "action": "send",
+        "sender_id": 1,
+        "recipient_id": 2,
+        "content": "Привет!"
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "success": true,
+        "message": {
+          "content": "string"
+        }
+      },
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Get messages between users",
+      "method": "GET",
+      "path": "/?user_id=1&friend_id=2",
+      "expectedStatus": 200,
+      "expectedBody": {
+        "messages": []
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
